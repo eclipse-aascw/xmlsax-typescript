@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 xmlsax-typescript AUTHORS
+//
+// SPDX-License-Identifier: MIT
+
 import { XmlSaxBuildError } from "./errors";
 import { serializeXml } from "./serializer";
 import { CdataToken, OpenTagToken, TextToken } from "./tokens";

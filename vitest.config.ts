@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 xmlsax-typescript AUTHORS
+//
+// SPDX-License-Identifier: MIT
+
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({

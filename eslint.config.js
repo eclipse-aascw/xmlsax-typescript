@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 xmlsax-typescript AUTHORS
+//
+// SPDX-License-Identifier: MIT
+
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import js from "@eslint/js";

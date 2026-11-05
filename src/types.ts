@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 xmlsax-typescript AUTHORS
+//
+// SPDX-License-Identifier: MIT
+
 export interface XmlPosition {
   offset: number;
   line: number;

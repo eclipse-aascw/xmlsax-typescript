@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 xmlsax-typescript AUTHORS
+//
+// SPDX-License-Identifier: MIT
+
 export { XmlSaxParser, tokenizeXml, tokenizeXmlAsync } from "./parser";
 export { dispatchToken, isBuildToken } from "./dispatch";
 export { XmlSaxBuildError, XmlSaxError, XmlSaxInvariantError, XmlSaxLibraryError } from "./errors";
