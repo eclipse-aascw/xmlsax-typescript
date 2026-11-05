@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 xmlsax-typescript AUTHORS
+//
+// SPDX-License-Identifier: MIT
+
 import { isBuildToken } from "./dispatch";
 import { XmlSaxBuildError } from "./errors";
 import { XmlSaxParser } from "./parser";

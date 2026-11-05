@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 xmlsax-typescript AUTHORS
+//
+// SPDX-License-Identifier: MIT
+
 import { describe, expect, it } from "vitest";
 import { CloseTagToken, OpenTagToken, TextToken, XmlSaxBuildError, XmlSaxParser, parseXmlString } from "../src/index";
 import { collectEvents, collectTokensFromChunks, getAttrUri } from "./helpers";

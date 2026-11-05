@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 xmlsax-typescript AUTHORS
+//
+// SPDX-License-Identifier: MIT
+
 import { assert } from "./assert";
 import { decodeEntities, splitTextForEntities } from "./entities";
 import { XmlSaxError } from "./errors";

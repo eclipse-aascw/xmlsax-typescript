@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 xmlsax-typescript AUTHORS
+#
+# SPDX-License-Identifier: MIT
+
+version = 1
+
+# Prose and metadata where a header would end up in the rendered output
+# (e.g., README shown on GitHub and npm) or which can not carry a comment
+# (JSON). The package files are managed by npm.
+[[annotations]]
+path = [
+    "AUTHORS",
+    "README.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "tests/README.md",
+    "package.json",
+    "package-lock.json",
+    "tsconfig.json",
+    "tsconfig.eslint.json",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 xmlsax-typescript AUTHORS"
+SPDX-License-Identifier = "MIT"
+
+# The XML fixtures are test input which the tests parse as-is, so they are
+# kept free of extra comments.
+[[annotations]]
+path = "tests/fixtures/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 xmlsax-typescript AUTHORS"
+SPDX-License-Identifier = "MIT"

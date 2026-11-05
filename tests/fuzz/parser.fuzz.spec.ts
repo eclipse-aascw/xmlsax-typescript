@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 xmlsax-typescript AUTHORS
+//
+// SPDX-License-Identifier: MIT
+
 import * as fc from "fast-check";
 import { describe, it } from "vitest";
 import { parseXmlString, serializeXml } from "../../src/index";

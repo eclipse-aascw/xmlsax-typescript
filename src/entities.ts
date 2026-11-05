@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 xmlsax-typescript AUTHORS
+//
+// SPDX-License-Identifier: MIT
+
 import { XmlSaxError } from "./errors";
 
 export function decodeEntities(input: string, onError?: (error: Error) => void): string {

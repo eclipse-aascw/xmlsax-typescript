@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 xmlsax-typescript AUTHORS
+//
+// SPDX-License-Identifier: MIT
+
 import type { SerializeOptions, XmlChild, XmlNode } from "./types";
 
 const DEFAULT_OPTIONS: Required<Pick<SerializeOptions, "pretty" | "indent" | "newline" | "xmlDeclaration">> = {
