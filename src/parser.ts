@@ -812,8 +812,17 @@ export class XmlSaxParser {
   }
 
   private _advanceSpan(start: number, end: number, cursor = this.cursor): void {
-    cursor.offset += end - start;
-    if (!this.trackPosition) {
+    const length = end - start;
+    cursor.offset += length;
+    if (!this.trackPosition || length === 0) {
+      return;
+    }
+
+    // Bound both native searches to the consumed span.
+    const span = this.buffer.slice(start, end);
+    if (!span.includes("\r") && !span.includes("\n")) {
+      cursor.column += length;
+      cursor.afterCR = false;
       return;
     }
 

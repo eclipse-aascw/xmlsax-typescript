@@ -171,6 +171,12 @@ describe("entities", () => {
       expect(error).toMatchObject({ line: 2, column: 9, offset: 15 });
     });
 
+    it("counts LF as a new line when a newline-free chunk follows CR", () => {
+      const text = "x".repeat(1024);
+      const error = parseError(["<r>\r", text, "\n&bad;</r>"]);
+      expect(error).toMatchObject({ line: 3, column: 1, offset: 5 + text.length });
+    });
+
     it("reports the document offset with zero line/column when trackPosition is false", () => {
       const error = location(parseError(["<root>\n  <item a=\"ok &unknown;\"/>\n</root>"], { trackPosition: false }));
       expect(error).toEqual({ message: "Unknown entity: &unknown; at 0:0", line: 0, column: 0, offset: 21 });
