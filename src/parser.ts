@@ -87,9 +87,7 @@ export class XmlSaxParser {
   private readonly coalesceText: boolean;
   private readonly trackPosition: boolean;
   private buffer = "";
-  private offset = 0;
-  private line = 1;
-  private column = 1;
+  private readonly cursor: XmlPosition & { afterCR: boolean };
   private readonly pathStack: string[] = [];
   private readonly tokenQueue: XmlAnyToken[] = [];
   private elementStack: StackEntry[] = [];
@@ -111,6 +109,8 @@ export class XmlSaxParser {
     this.allowDoctype = resolved.allowDoctype;
     this.coalesceText = resolved.coalesceText;
     this.trackPosition = resolved.trackPosition;
+    const origin = this.trackPosition ? 1 : 0;
+    this.cursor = { offset: 0, line: origin, column: origin, afterCR: false };
   }
 
   feed(chunk: string): XmlAnyToken[] {
@@ -183,14 +183,14 @@ export class XmlSaxParser {
         const tail = this.buffer.slice(i);
         if (!tail.includes("&")) {
           if (tail.length > 0) {
-            this._emitText(tail, true);
-            this._advance(tail);
+            this._emitText(tail, true, i);
+            this._advanceSpan(i, this.buffer.length);
           }
         } else {
           const split = splitTextForEntities(tail);
           if (split.emit.length > 0) {
-            this._emitText(split.emit, true);
-            this._advance(split.emit);
+            this._emitText(split.emit, true, i);
+            this._advanceSpan(i, i + split.emit.length);
           }
           this.buffer = split.carry;
           return;
@@ -202,8 +202,8 @@ export class XmlSaxParser {
       if (lt > i) {
         const text = this.buffer.slice(i, lt);
         if (text.length > 0) {
-          this._emitText(text, false);
-          this._advance(text);
+          this._emitText(text, false, i);
+          this._advanceSpan(i, lt);
         }
         i = lt;
       }
@@ -349,6 +349,9 @@ export class XmlSaxParser {
       >;
 
       for (const attr of parsed.attributes) {
+        if (attributes[attr.name] !== undefined) {
+          this._error(`Duplicate attribute: ${attr.name}`);
+        }
         attributes[attr.name] = attr.value;
       }
 
@@ -395,13 +398,25 @@ export class XmlSaxParser {
     const resolvedName = this._resolveName(parsed.name, ns);
     const attributes: Record<string, XmlAttribute> = Object.create(null) as Record<string, XmlAttribute>;
 
+    // Namespaces in XML 1.0, section 6.3: attribute names must be unique both as written and
+    // as expanded names, so `p:a` and `q:a` conflict when `p` and `q` are bound to the same URI.
+    const seen = parsed.attributes.length > 1 ? new Set<string>() : undefined;
     for (const attr of parsed.attributes) {
-      if (!this.includeNamespaceAttributes) {
-        if (attr.name === "xmlns" || attr.name.startsWith("xmlns:")) {
-          continue;
+      const isNamespaceDeclaration = attr.name === "xmlns" || attr.name.startsWith("xmlns:");
+      if (isNamespaceDeclaration && !this.includeNamespaceAttributes) {
+        if (seen !== undefined) {
+          this._markAttributeSeen(seen, attr.name, attr.name);
         }
+        continue;
       }
       const resolvedAttr = this._resolveAttributeName(attr.name, ns);
+      if (seen !== undefined) {
+        const key =
+          resolvedAttr.prefix === "" || isNamespaceDeclaration
+            ? resolvedAttr.name
+            : `{${resolvedAttr.uri}}${resolvedAttr.local}`;
+        this._markAttributeSeen(seen, key, resolvedAttr.name);
+      }
       attributes[resolvedAttr.name] = {
         name: resolvedAttr.name,
         value: attr.value,
@@ -509,7 +524,8 @@ export class XmlSaxParser {
 
       const rawValue = this.buffer.slice(i, valueEnd);
       const normalized = rawValue.includes("\r") ? rawValue.replace(CRLF_RE, "\n") : rawValue;
-      const value = !normalized.includes("&") ? normalized : decodeEntities(normalized);
+      // The parser position currently corresponds to the tag's '<' at `start - 1`.
+      const value = !normalized.includes("&") ? normalized : this._decodeEntities(normalized, i, start - 1);
       attributes.push({ name: attrName.name, value });
       i = valueEnd + 1;
     }
@@ -543,7 +559,7 @@ export class XmlSaxParser {
     this._assertInternalState("after close tag");
   }
 
-  private _emitText(text: string, allowPendingCR: boolean): void {
+  private _emitText(text: string, allowPendingCR: boolean, rawStart: number): void {
     const normalized = this._normalizeText(text, allowPendingCR);
     if (normalized.length === 0) {
       return;
@@ -554,7 +570,8 @@ export class XmlSaxParser {
       return;
     }
 
-    const decoded = decodeEntities(normalized);
+    // The parser position currently corresponds to `rawStart`, the start of this text in the buffer.
+    const decoded = this._decodeEntities(normalized, rawStart, rawStart);
     if (decoded.length > 0) {
       this._emitDecodedText(decoded);
     }
@@ -764,30 +781,6 @@ export class XmlSaxParser {
     return this.nsStack[this.nsStack.length - 1] ?? (Object.create(null) as NamespaceMap);
   }
 
-  private _advance(text: string): void {
-    this.offset += text.length;
-    if (!this.trackPosition) {
-      return;
-    }
-
-    let pos = text.indexOf("\n");
-    if (pos === -1) {
-      this.column += text.length;
-      return;
-    }
-
-    let newlineCount = 0;
-    let lastNewline = -1;
-    while (pos !== -1) {
-      newlineCount += 1;
-      lastNewline = pos;
-      pos = text.indexOf("\n", pos + 1);
-    }
-
-    this.line += newlineCount;
-    this.column = text.length - lastNewline;
-  }
-
   private _normalizeText(text: string, allowPendingCR: boolean): string {
     if (!text) {
       return "";
@@ -818,29 +811,32 @@ export class XmlSaxParser {
     return prefix ? `${prefix}${normalized}` : normalized;
   }
 
-  private _advanceSpan(start: number, end: number): void {
+  private _advanceSpan(start: number, end: number, cursor = this.cursor): void {
     const length = end - start;
-    this.offset += length;
-    if (!this.trackPosition) {
+    cursor.offset += length;
+    if (!this.trackPosition || length === 0) {
       return;
     }
 
-    let pos = this.buffer.indexOf("\n", start);
-    if (pos === -1 || pos >= end) {
-      this.column += length;
+    // Bound both native searches to the consumed span.
+    const span = this.buffer.slice(start, end);
+    if (!span.includes("\r") && !span.includes("\n")) {
+      cursor.column += length;
+      cursor.afterCR = false;
       return;
     }
 
-    let newlineCount = 0;
-    let lastNewline = -1;
-    while (pos !== -1 && pos < end) {
-      newlineCount += 1;
-      lastNewline = pos;
-      pos = this.buffer.indexOf("\n", pos + 1);
+    for (let i = start; i < end; i += 1) {
+      const code = this.buffer.charCodeAt(i);
+      // A CR starts a new line immediately. Its LF may arrive in a later feed.
+      if (code === 13 || (code === 10 && !cursor.afterCR)) {
+        cursor.line += 1;
+        cursor.column = 1;
+      } else if (code !== 10) {
+        cursor.column += 1;
+      }
+      cursor.afterCR = code === 13;
     }
-
-    this.line += newlineCount;
-    this.column = end - lastNewline;
   }
 
   private _flushPendingCR(): void {
@@ -851,19 +847,53 @@ export class XmlSaxParser {
     this._emitDecodedText("\n");
   }
 
+  private _markAttributeSeen(seen: Set<string>, key: string, name: string): void {
+    if (seen.has(key)) {
+      this._error(key === name ? `Duplicate attribute: ${name}` : `Duplicate attribute: ${name} (expanded name ${key})`);
+    }
+    seen.add(key);
+  }
+
+  /**
+   * Decodes entities in `value`, the CR-normalized form of the raw buffer slice starting
+   * at `rawStart`. Errors are reported at the document position of the offending `&`.
+   * `baseIndex` is the buffer index that the parser's current position refers to.
+   */
+  private _decodeEntities(value: string, rawStart: number, baseIndex: number): string {
+    return decodeEntities(value, (message, index) => {
+      // Line-ending normalization never adds or removes '&', so the n-th '&' in `value`
+      // is the n-th '&' in the raw buffer slice.
+      let ampersandsBefore = 0;
+      for (let k = value.indexOf("&"); k !== -1 && k < index; k = value.indexOf("&", k + 1)) {
+        ampersandsBefore += 1;
+      }
+      let target = this.buffer.indexOf("&", rawStart);
+      for (; ampersandsBefore > 0 && target !== -1; ampersandsBefore -= 1) {
+        target = this.buffer.indexOf("&", target + 1);
+      }
+      assert(target !== -1, "Entity error must map to an '&' in the buffer");
+      return this._errorAt(message, baseIndex, target);
+    });
+  }
+
+  /**
+   * Throws an error located at buffer index `target`, given that the parser's current
+   * position refers to buffer index `baseIndex` (with `baseIndex <= target`).
+   */
+  private _errorAt(message: string, baseIndex: number, target: number): never {
+    const position = { ...this.cursor };
+    this._advanceSpan(baseIndex, target, position);
+    throw new XmlSaxError(message, position.offset, position.line, position.column);
+  }
+
   private _error(message: string): never {
-    const line = this.trackPosition ? this.line : 0;
-    const column = this.trackPosition ? this.column : 0;
-    const error = new XmlSaxError(message, this.offset, line, column);
-    throw error;
+    const { offset, line, column } = this.cursor;
+    throw new XmlSaxError(message, offset, line, column);
   }
 
   private _position(): XmlPosition {
-    return {
-      offset: this.offset,
-      line: this.trackPosition ? this.line : 0,
-      column: this.trackPosition ? this.column : 0
-    };
+    const { offset, line, column } = this.cursor;
+    return { offset, line, column };
   }
 
   private _pushToken(token: XmlAnyToken): void {

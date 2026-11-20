@@ -97,4 +97,89 @@ describe("entities", () => {
     expect(missingDigits).toBeInstanceOf(XmlSaxError);
     expect(missingHexDigits).toBeInstanceOf(XmlSaxError);
   });
+
+  describe("error positions", () => {
+    function parseError(chunks: string[], options: ConstructorParameters<typeof XmlSaxParser>[0] = {}): XmlSaxError {
+      return captureError(() => {
+        const parser = new XmlSaxParser(options);
+        for (const chunk of chunks) {
+          parser.feed(chunk);
+        }
+        parser.close();
+      });
+    }
+
+    function location(error: XmlSaxError): { message: string; line: number; column: number; offset: number } {
+      return { message: error.message, line: error.line, column: error.column, offset: error.offset };
+    }
+
+    it("reports the document position of an unknown entity in text", () => {
+      expect(location(parseError(["<root>\n  <item>&unknown;</item>\n</root>"]))).toEqual({
+        message: "Unknown entity: &unknown; at 2:9",
+        line: 2,
+        column: 9,
+        offset: 15
+      });
+    });
+
+    it("reports the document position of an unknown entity in an attribute", () => {
+      expect(location(parseError(["<root>\n  <item a=\"ok &unknown;\"/>\n</root>"]))).toEqual({
+        message: "Unknown entity: &unknown; at 2:15",
+        line: 2,
+        column: 15,
+        offset: 21
+      });
+    });
+
+    it("reports the document position of an unterminated entity", () => {
+      expect(location(parseError(["<root>\n  <item>&amp</item>\n</root>"]))).toEqual({
+        message: "Unterminated entity at 2:9",
+        line: 2,
+        column: 9,
+        offset: 15
+      });
+    });
+
+    it("points at the offending entity after valid entities and newlines", () => {
+      const text = location(parseError(["<root>&amp;\n&lt; &bad;</root>"]));
+      expect(text).toMatchObject({ line: 2, column: 6, offset: 17 });
+
+      const attr = location(parseError(["<root a='&amp;\n&bad;'/>"]));
+      expect(attr).toMatchObject({ line: 2, column: 1, offset: 15 });
+    });
+
+    it("accounts for CRLF normalization when locating the entity", () => {
+      const error = location(parseError(["<root>a\r\nb &bad;</root>"]));
+      expect(error).toMatchObject({ line: 2, column: 3, offset: 11 });
+    });
+
+    it.each([
+      { name: "standalone CR in text", xml: "<r>x\r&bad;</r>", column: 1, offset: 5 },
+      { name: "standalone CR in an attribute", xml: "<r a='x\r&bad;'/>", column: 1, offset: 8 },
+      { name: "standalone CR in preceding markup", xml: "<r\r>&bad;</r>", column: 2, offset: 4 },
+      { name: "CRLF in text", xml: "<r>x\r\n&bad;</r>", column: 1, offset: 6 }
+    ])("locates an entity after $name at every chunk boundary", ({ xml, column, offset }) => {
+      for (let split = 0; split <= xml.length; split += 1) {
+        const error = parseError([xml.slice(0, split), xml.slice(split)]);
+        expect(error).toBeInstanceOf(XmlSaxError);
+        expect(error).toMatchObject({ line: 2, column, offset });
+      }
+    });
+
+    it("reports document positions when the entity spans chunks", () => {
+      const error = location(parseError(["<root>\n  <item>&unk", "nown;</item>\n</root>"]));
+      expect(error).toMatchObject({ line: 2, column: 9, offset: 15 });
+    });
+
+    it("counts LF as a new line when a newline-free chunk follows CR", () => {
+      const text = "x".repeat(1024);
+      const error = parseError(["<r>\r", text, "\n&bad;</r>"]);
+      expect(error).toMatchObject({ line: 3, column: 1, offset: 5 + text.length });
+    });
+
+    it("reports the document offset with zero line/column when trackPosition is false", () => {
+      const error = location(parseError(["<root>\n  <item a=\"ok &unknown;\"/>\n</root>"], { trackPosition: false }));
+      expect(error).toEqual({ message: "Unknown entity: &unknown; at 0:0", line: 0, column: 0, offset: 21 });
+    });
+  });
 });

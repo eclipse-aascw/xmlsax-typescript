@@ -4,7 +4,17 @@
 
 import { XmlSaxError } from "./errors";
 
-export function decodeEntities(input: string, onError?: (error: Error) => void): string {
+/**
+ * Reports a malformed entity reference. `index` is the position of the offending
+ * `&` within `input`. Implementations must throw.
+ */
+export type EntityErrorReporter = (message: string, index: number) => never;
+
+const throwSliceRelativeError: EntityErrorReporter = (message, index) => {
+  throw new XmlSaxError(message, index, 0, 0);
+};
+
+export function decodeEntities(input: string, fail: EntityErrorReporter = throwSliceRelativeError): string {
   const firstAmp = input.indexOf("&");
   if (firstAmp === -1) {
     return input;
@@ -28,9 +38,7 @@ export function decodeEntities(input: string, onError?: (error: Error) => void):
 
     const semi = input.indexOf(";", amp + 1);
     if (semi === -1) {
-      const err = new XmlSaxError("Unterminated entity", amp, 0, 0);
-      onError?.(err);
-      throw err;
+      fail("Unterminated entity", amp);
     }
 
     let decoded: string | undefined;
@@ -45,9 +53,7 @@ export function decodeEntities(input: string, onError?: (error: Error) => void):
 
     if (decoded === undefined) {
       const entity = input.slice(amp + 1, semi);
-      const err = new XmlSaxError(`Unknown entity: &${entity};`, amp, 0, 0);
-      onError?.(err);
-      throw err;
+      fail(`Unknown entity: &${entity};`, amp);
     }
 
     result += decoded;

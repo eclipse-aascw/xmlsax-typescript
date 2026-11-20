@@ -75,6 +75,59 @@ describe("error handling", () => {
     expect(error).toBeInstanceOf(XmlSaxError);
   });
 
+  it("rejects duplicate attributes", () => {
+    for (const options of [{}, { xmlns: false }, { includeNamespaceAttributes: true }]) {
+      const error = captureError(() => {
+        const parser = new XmlSaxParser(options);
+        parser.feed("<root>\n  <item a=\"1\" b=\"x\" a=\"2\"/>\n</root>");
+        parser.close();
+      });
+
+      expect(error).toBeInstanceOf(XmlSaxError);
+      expect(error.message).toBe("Duplicate attribute: a at 2:3");
+      expect(error.offset).toBe(9);
+    }
+  });
+
+  it("rejects duplicate attributes with the same expanded name", () => {
+    const error = captureError(() => {
+      const parser = new XmlSaxParser();
+      parser.feed("<root xmlns:p=\"urn:x\" xmlns:q=\"urn:x\" p:a=\"1\" q:a=\"2\"/>");
+      parser.close();
+    });
+
+    expect(error).toBeInstanceOf(XmlSaxError);
+    expect(error.message).toBe("Duplicate attribute: q:a (expanded name {urn:x}a) at 1:1");
+  });
+
+  it("rejects duplicate namespace declarations", () => {
+    for (const options of [{}, { includeNamespaceAttributes: true }]) {
+      const error = captureError(() => {
+        const parser = new XmlSaxParser(options);
+        parser.feed("<root xmlns:p=\"urn:x\" xmlns:p=\"urn:y\"/>");
+        parser.close();
+      });
+
+      expect(error).toBeInstanceOf(XmlSaxError);
+      expect(error.message).toBe("Duplicate attribute: xmlns:p at 1:1");
+    }
+  });
+
+  it("accepts attributes that differ only by namespace or prefix binding", () => {
+    const parser = new XmlSaxParser();
+    const tokens = [
+      ...parser.feed("<root xmlns:p=\"urn:x\" xmlns:q=\"urn:y\" a=\"0\" p:a=\"1\" q:a=\"2\" xmlns=\"urn:d\"/>"),
+      ...parser.close()
+    ];
+    expect(tokens.length).toBeGreaterThan(0);
+
+    const plain = new XmlSaxParser({ xmlns: false });
+    expect(() => {
+      plain.feed("<root xmlns:p=\"urn:x\" xmlns:q=\"urn:x\" p:a=\"1\" q:a=\"2\"/>");
+      plain.close();
+    }).not.toThrow();
+  });
+
   it("blocks doctype when disallowed", () => {
     const parser = new XmlSaxParser({ allowDoctype: false });
     const error = captureError(() => {
