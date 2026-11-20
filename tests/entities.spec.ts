@@ -153,6 +153,19 @@ describe("entities", () => {
       expect(error).toMatchObject({ line: 2, column: 3, offset: 11 });
     });
 
+    it.each([
+      { name: "standalone CR in text", xml: "<r>x\r&bad;</r>", column: 1, offset: 5 },
+      { name: "standalone CR in an attribute", xml: "<r a='x\r&bad;'/>", column: 1, offset: 8 },
+      { name: "standalone CR in preceding markup", xml: "<r\r>&bad;</r>", column: 2, offset: 4 },
+      { name: "CRLF in text", xml: "<r>x\r\n&bad;</r>", column: 1, offset: 6 }
+    ])("locates an entity after $name at every chunk boundary", ({ xml, column, offset }) => {
+      for (let split = 0; split <= xml.length; split += 1) {
+        const error = parseError([xml.slice(0, split), xml.slice(split)]);
+        expect(error).toBeInstanceOf(XmlSaxError);
+        expect(error).toMatchObject({ line: 2, column, offset });
+      }
+    });
+
     it("reports document positions when the entity spans chunks", () => {
       const error = location(parseError(["<root>\n  <item>&unk", "nown;</item>\n</root>"]));
       expect(error).toMatchObject({ line: 2, column: 9, offset: 15 });

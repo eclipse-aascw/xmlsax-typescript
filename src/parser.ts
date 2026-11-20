@@ -87,9 +87,7 @@ export class XmlSaxParser {
   private readonly coalesceText: boolean;
   private readonly trackPosition: boolean;
   private buffer = "";
-  private offset = 0;
-  private line = 1;
-  private column = 1;
+  private readonly cursor: XmlPosition & { afterCR: boolean };
   private readonly pathStack: string[] = [];
   private readonly tokenQueue: XmlAnyToken[] = [];
   private elementStack: StackEntry[] = [];
@@ -111,6 +109,8 @@ export class XmlSaxParser {
     this.allowDoctype = resolved.allowDoctype;
     this.coalesceText = resolved.coalesceText;
     this.trackPosition = resolved.trackPosition;
+    const origin = this.trackPosition ? 1 : 0;
+    this.cursor = { offset: 0, line: origin, column: origin, afterCR: false };
   }
 
   feed(chunk: string): XmlAnyToken[] {
@@ -184,13 +184,13 @@ export class XmlSaxParser {
         if (!tail.includes("&")) {
           if (tail.length > 0) {
             this._emitText(tail, true, i);
-            this._advance(tail);
+            this._advanceSpan(i, this.buffer.length);
           }
         } else {
           const split = splitTextForEntities(tail);
           if (split.emit.length > 0) {
             this._emitText(split.emit, true, i);
-            this._advance(split.emit);
+            this._advanceSpan(i, i + split.emit.length);
           }
           this.buffer = split.carry;
           return;
@@ -203,7 +203,7 @@ export class XmlSaxParser {
         const text = this.buffer.slice(i, lt);
         if (text.length > 0) {
           this._emitText(text, false, i);
-          this._advance(text);
+          this._advanceSpan(i, lt);
         }
         i = lt;
       }
@@ -781,30 +781,6 @@ export class XmlSaxParser {
     return this.nsStack[this.nsStack.length - 1] ?? (Object.create(null) as NamespaceMap);
   }
 
-  private _advance(text: string): void {
-    this.offset += text.length;
-    if (!this.trackPosition) {
-      return;
-    }
-
-    let pos = text.indexOf("\n");
-    if (pos === -1) {
-      this.column += text.length;
-      return;
-    }
-
-    let newlineCount = 0;
-    let lastNewline = -1;
-    while (pos !== -1) {
-      newlineCount += 1;
-      lastNewline = pos;
-      pos = text.indexOf("\n", pos + 1);
-    }
-
-    this.line += newlineCount;
-    this.column = text.length - lastNewline;
-  }
-
   private _normalizeText(text: string, allowPendingCR: boolean): string {
     if (!text) {
       return "";
@@ -835,29 +811,23 @@ export class XmlSaxParser {
     return prefix ? `${prefix}${normalized}` : normalized;
   }
 
-  private _advanceSpan(start: number, end: number): void {
-    const length = end - start;
-    this.offset += length;
+  private _advanceSpan(start: number, end: number, cursor = this.cursor): void {
+    cursor.offset += end - start;
     if (!this.trackPosition) {
       return;
     }
 
-    let pos = this.buffer.indexOf("\n", start);
-    if (pos === -1 || pos >= end) {
-      this.column += length;
-      return;
+    for (let i = start; i < end; i += 1) {
+      const code = this.buffer.charCodeAt(i);
+      // A CR starts a new line immediately. Its LF may arrive in a later feed.
+      if (code === 13 || (code === 10 && !cursor.afterCR)) {
+        cursor.line += 1;
+        cursor.column = 1;
+      } else if (code !== 10) {
+        cursor.column += 1;
+      }
+      cursor.afterCR = code === 13;
     }
-
-    let newlineCount = 0;
-    let lastNewline = -1;
-    while (pos !== -1 && pos < end) {
-      newlineCount += 1;
-      lastNewline = pos;
-      pos = this.buffer.indexOf("\n", pos + 1);
-    }
-
-    this.line += newlineCount;
-    this.column = end - lastNewline;
   }
 
   private _flushPendingCR(): void {
@@ -902,37 +872,19 @@ export class XmlSaxParser {
    * position refers to buffer index `baseIndex` (with `baseIndex <= target`).
    */
   private _errorAt(message: string, baseIndex: number, target: number): never {
-    const offset = this.offset + (target - baseIndex);
-    if (!this.trackPosition) {
-      throw new XmlSaxError(message, offset, 0, 0);
-    }
-
-    let line = this.line;
-    let column = this.column;
-    for (let k = baseIndex; k < target; k += 1) {
-      if (this.buffer.charCodeAt(k) === 10) {
-        line += 1;
-        column = 1;
-      } else {
-        column += 1;
-      }
-    }
-    throw new XmlSaxError(message, offset, line, column);
+    const position = { ...this.cursor };
+    this._advanceSpan(baseIndex, target, position);
+    throw new XmlSaxError(message, position.offset, position.line, position.column);
   }
 
   private _error(message: string): never {
-    const line = this.trackPosition ? this.line : 0;
-    const column = this.trackPosition ? this.column : 0;
-    const error = new XmlSaxError(message, this.offset, line, column);
-    throw error;
+    const { offset, line, column } = this.cursor;
+    throw new XmlSaxError(message, offset, line, column);
   }
 
   private _position(): XmlPosition {
-    return {
-      offset: this.offset,
-      line: this.trackPosition ? this.line : 0,
-      column: this.trackPosition ? this.column : 0
-    };
+    const { offset, line, column } = this.cursor;
+    return { offset, line, column };
   }
 
   private _pushToken(token: XmlAnyToken): void {
