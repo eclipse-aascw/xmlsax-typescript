@@ -183,13 +183,13 @@ export class XmlSaxParser {
         const tail = this.buffer.slice(i);
         if (!tail.includes("&")) {
           if (tail.length > 0) {
-            this._emitText(tail, true);
+            this._emitText(tail, true, i);
             this._advance(tail);
           }
         } else {
           const split = splitTextForEntities(tail);
           if (split.emit.length > 0) {
-            this._emitText(split.emit, true);
+            this._emitText(split.emit, true, i);
             this._advance(split.emit);
           }
           this.buffer = split.carry;
@@ -202,7 +202,7 @@ export class XmlSaxParser {
       if (lt > i) {
         const text = this.buffer.slice(i, lt);
         if (text.length > 0) {
-          this._emitText(text, false);
+          this._emitText(text, false, i);
           this._advance(text);
         }
         i = lt;
@@ -349,6 +349,9 @@ export class XmlSaxParser {
       >;
 
       for (const attr of parsed.attributes) {
+        if (attributes[attr.name] !== undefined) {
+          this._error(`Duplicate attribute: ${attr.name}`);
+        }
         attributes[attr.name] = attr.value;
       }
 
@@ -395,13 +398,25 @@ export class XmlSaxParser {
     const resolvedName = this._resolveName(parsed.name, ns);
     const attributes: Record<string, XmlAttribute> = Object.create(null) as Record<string, XmlAttribute>;
 
+    // Namespaces in XML 1.0, section 6.3: attribute names must be unique both as written and
+    // as expanded names, so `p:a` and `q:a` conflict when `p` and `q` are bound to the same URI.
+    const seen = parsed.attributes.length > 1 ? new Set<string>() : undefined;
     for (const attr of parsed.attributes) {
-      if (!this.includeNamespaceAttributes) {
-        if (attr.name === "xmlns" || attr.name.startsWith("xmlns:")) {
-          continue;
+      const isNamespaceDeclaration = attr.name === "xmlns" || attr.name.startsWith("xmlns:");
+      if (isNamespaceDeclaration && !this.includeNamespaceAttributes) {
+        if (seen !== undefined) {
+          this._markAttributeSeen(seen, attr.name, attr.name);
         }
+        continue;
       }
       const resolvedAttr = this._resolveAttributeName(attr.name, ns);
+      if (seen !== undefined) {
+        const key =
+          resolvedAttr.prefix === "" || isNamespaceDeclaration
+            ? resolvedAttr.name
+            : `{${resolvedAttr.uri}}${resolvedAttr.local}`;
+        this._markAttributeSeen(seen, key, resolvedAttr.name);
+      }
       attributes[resolvedAttr.name] = {
         name: resolvedAttr.name,
         value: attr.value,
@@ -509,7 +524,8 @@ export class XmlSaxParser {
 
       const rawValue = this.buffer.slice(i, valueEnd);
       const normalized = rawValue.includes("\r") ? rawValue.replace(CRLF_RE, "\n") : rawValue;
-      const value = !normalized.includes("&") ? normalized : decodeEntities(normalized);
+      // The parser position currently corresponds to the tag's '<' at `start - 1`.
+      const value = !normalized.includes("&") ? normalized : this._decodeEntities(normalized, i, start - 1);
       attributes.push({ name: attrName.name, value });
       i = valueEnd + 1;
     }
@@ -543,7 +559,7 @@ export class XmlSaxParser {
     this._assertInternalState("after close tag");
   }
 
-  private _emitText(text: string, allowPendingCR: boolean): void {
+  private _emitText(text: string, allowPendingCR: boolean, rawStart: number): void {
     const normalized = this._normalizeText(text, allowPendingCR);
     if (normalized.length === 0) {
       return;
@@ -554,7 +570,8 @@ export class XmlSaxParser {
       return;
     }
 
-    const decoded = decodeEntities(normalized);
+    // The parser position currently corresponds to `rawStart`, the start of this text in the buffer.
+    const decoded = this._decodeEntities(normalized, rawStart, rawStart);
     if (decoded.length > 0) {
       this._emitDecodedText(decoded);
     }
@@ -849,6 +866,58 @@ export class XmlSaxParser {
     }
     this.pendingCR = false;
     this._emitDecodedText("\n");
+  }
+
+  private _markAttributeSeen(seen: Set<string>, key: string, name: string): void {
+    if (seen.has(key)) {
+      this._error(key === name ? `Duplicate attribute: ${name}` : `Duplicate attribute: ${name} (expanded name ${key})`);
+    }
+    seen.add(key);
+  }
+
+  /**
+   * Decodes entities in `value`, the CR-normalized form of the raw buffer slice starting
+   * at `rawStart`. Errors are reported at the document position of the offending `&`.
+   * `baseIndex` is the buffer index that the parser's current position refers to.
+   */
+  private _decodeEntities(value: string, rawStart: number, baseIndex: number): string {
+    return decodeEntities(value, (message, index) => {
+      // Line-ending normalization never adds or removes '&', so the n-th '&' in `value`
+      // is the n-th '&' in the raw buffer slice.
+      let ampersandsBefore = 0;
+      for (let k = value.indexOf("&"); k !== -1 && k < index; k = value.indexOf("&", k + 1)) {
+        ampersandsBefore += 1;
+      }
+      let target = this.buffer.indexOf("&", rawStart);
+      for (; ampersandsBefore > 0 && target !== -1; ampersandsBefore -= 1) {
+        target = this.buffer.indexOf("&", target + 1);
+      }
+      assert(target !== -1, "Entity error must map to an '&' in the buffer");
+      return this._errorAt(message, baseIndex, target);
+    });
+  }
+
+  /**
+   * Throws an error located at buffer index `target`, given that the parser's current
+   * position refers to buffer index `baseIndex` (with `baseIndex <= target`).
+   */
+  private _errorAt(message: string, baseIndex: number, target: number): never {
+    const offset = this.offset + (target - baseIndex);
+    if (!this.trackPosition) {
+      throw new XmlSaxError(message, offset, 0, 0);
+    }
+
+    let line = this.line;
+    let column = this.column;
+    for (let k = baseIndex; k < target; k += 1) {
+      if (this.buffer.charCodeAt(k) === 10) {
+        line += 1;
+        column = 1;
+      } else {
+        column += 1;
+      }
+    }
+    throw new XmlSaxError(message, offset, line, column);
   }
 
   private _error(message: string): never {
